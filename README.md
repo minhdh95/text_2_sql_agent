@@ -27,7 +27,7 @@
 
 ```
 .
-├── text_to_sql_agent.py              # File chính chạy ứng dụng
+├── ai_agent.py          # File chính chạy ứng dụng
 ├── my_data.db           # File SQLite (dữ liệu mẫu)
 ├── .env                 # Biến môi trường (API key, v.v.)
 └── README.md            # Tài liệu dự án
@@ -40,8 +40,7 @@
 ### 1. Clone dự án và tạo môi trường
 
 ```bash
-git clone https://github.com/trangq/text_to_sql_agent.git
-cd text-to-sql-gemini
+git clone https://github.com/minhdh95/sql_ai_agent.git
 python -m venv venv
 source venv/bin/activate   # Hoặc venv\Scripts\activate trên Windows
 ```
@@ -50,11 +49,6 @@ source venv/bin/activate   # Hoặc venv\Scripts\activate trên Windows
 
 ```bash
 pip install -r requirements.txt
-```
-
-> Nếu chưa có file `requirements.txt`, bạn có thể dùng:
-```bash
-pip install langchain langchain-google-genai gradio python-dotenv
 ```
 
 ### 3. Tạo file `.env`
@@ -84,7 +78,7 @@ CREATE TABLE customers (
 ### 5. Chạy ứng dụng
 
 ```bash
-python text_to_sql_agent.py
+python ai_agent.py
 ```
 
 > Ứng dụng chạy tại: `http://localhost:7861`
@@ -93,9 +87,7 @@ python text_to_sql_agent.py
 
 ## 💡 Ví dụ câu hỏi
 
-- "Liệt kê 5 khách hàng gần đây nhất?"
-- "How many orders were placed last month?"
-- "Có bao nhiêu sản phẩm trong kho?"
+- "Tổng cộng có bao nhiêu show?"
 
 ---
 
