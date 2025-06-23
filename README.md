@@ -117,11 +117,4 @@ python text_to_sql_agent.py
 
 ---
 
-## 📧 Liên hệ
-
-- Tác giả: trangqh
-- Email: trangqh1712@gmail.com
-
----
-
 
