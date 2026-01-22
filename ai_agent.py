@@ -1,107 +1,132 @@
 import os
-import logging
 from dotenv import load_dotenv
 import gradio as gr
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_community.utilities.sql_database import SQLDatabase
-from langchain.agents.agent_toolkits import create_sql_agent
-from langchain.memory import ConversationBufferMemory
-from langchain.callbacks.base import BaseCallbackHandler
+from groq import Groq
+from sqlalchemy import create_engine, text
 
-# === Load biến môi trường ===
+# ===== LOAD ENV =====
 load_dotenv()
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+# ===== INIT GROQ =====
+client = Groq(api_key=GROQ_API_KEY)
+
+DB_URI = "sqlite:///my_data.db"   # đúng với file bạn đang có
+engine = create_engine(DB_URI)
+def get_db_schema() -> str:
+    schema = ""
+    with engine.connect() as conn:
+        tables = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table'")
+        ).fetchall()
+
+        for (table_name,) in tables:
+            schema += f"\nTable {table_name} (\n"
+            columns = conn.execute(
+                text(f"PRAGMA table_info({table_name})")
+            ).fetchall()
+
+            for col in columns:
+                schema += f"  {col[1]} {col[2]},\n"
+            schema += ")\n"
+
+    return schema
 
 
-# === Callback để thu SQL ===
-class SQLHandler(BaseCallbackHandler):
-    def __init__(self):
-        self.sql_result = []
+# ===== TEXT → SQL =====
+def text_to_sql(question: str) -> str:
+    schema = get_db_schema()   # 👈 lấy schema thật
 
-    def on_agent_action(self, action, **kwargs):
-        if action.tool in ["sql_db_query", "sql_db_query_checker"]:
-            sql_text = action.tool_input.strip()
-            if sql_text not in self.sql_result:
-                self.sql_result.append(sql_text)
+    prompt = f"""
+Bạn là chuyên gia SQL.
 
+Schema database:
+{schema}
 
+Viết câu SQL CHÍNH XÁC để trả lời câu hỏi.
+Chỉ trả về SQL thuần, KHÔNG markdown, KHÔNG giải thích.
 
-# === Lớp chính ===
-class TextToSQLAgent:
-    def __init__(self, api_key: str, db_uri: str):
-        self.api_key = api_key
-        self.db_uri = db_uri
-        self.llm = self._init_llm()
-        self.db = SQLDatabase.from_uri(self.db_uri)
-        self.memory = ConversationBufferMemory(
-            memory_key="chat_history",
-            return_messages=True,
-            output_key="output"
-        )
-        self.agent = self._init_agent()
+Câu hỏi:
+{question}
+"""
 
-    def _init_llm(self):
-        return ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash",
-            google_api_key=self.api_key,
-            temperature=0.3,
-            max_output_tokens=2048
-        )
+    res = client.chat.completions.create(
+        model="meta-llama/llama-4-scout-17b-16e-instruct",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0,
+    )
 
-    def _init_agent(self):
-        agent = create_sql_agent(
-            llm=self.llm,
-            db=self.db,
-            verbose=True,
-            memory=self.memory,
-            agent_executor_kwargs={"return_intermediate_steps": True}
-        )
-        return agent
-
-    def query(self, user_question: str) -> dict:
-        try:
-            handler = SQLHandler()
-            result = self.agent.invoke(
-                {"input": user_question},
-                config={"callbacks": [handler]}
-            )
-
-            output = result.get("output", "Không thể xử lý truy vấn.")
-            sql_queries = handler.sql_result
-
-            return {
-                "output": output,
-                "sql": "\n".join(sql_queries) if sql_queries else "⚠️ Không tìm thấy câu SQL phù hợp."
-            }
-
-        except Exception as e:
-            logger.exception("Lỗi khi xử lý truy vấn")
-            return {
-                "output": f"❌ Lỗi hệ thống: {e}",
-                "sql": ""
-            }
+    return res.choices[0].message.content.strip()
 
 
-# === Khởi tạo agent ===
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-db_uri = "sqlite:///my_data.db"
-agent = TextToSQLAgent(api_key=GOOGLE_API_KEY, db_uri=db_uri)
 
-# === Giao diện Gradio ===
-def handle_query(user_input):
-    response = agent.query(user_input)
-    return response["output"], response["sql"]
+# ===== RUN SQL =====
+def run_sql(sql: str):
+    with engine.connect() as conn:
+        result = conn.execute(text(sql))
+        rows = result.fetchall()
+        columns = result.keys()
+    return columns, rows
 
+
+# ===== RESULT → NGÔN NGỮ TỰ NHIÊN =====
+def explain_result(question, columns, rows):
+    prompt = f"""
+Người dùng hỏi:
+{question}
+
+Kết quả truy vấn:
+Cột: {list(columns)}
+Dữ liệu: {rows}
+
+Hãy trả lời bằng tiếng Việt, dễ hiểu, tự nhiên như người thật.
+"""
+
+    res = client.chat.completions.create(
+        model="meta-llama/llama-4-scout-17b-16e-instruct",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7,
+    )
+
+    return res.choices[0].message.content
+
+def clean_sql(sql: str) -> str:
+    sql = sql.strip()
+
+    # Xóa markdown ```sql ... ```
+    if sql.startswith("```"):
+        sql = sql.replace("```sql", "")
+        sql = sql.replace("```", "")
+        sql = sql.strip()
+
+    return sql
+
+# ===== PIPELINE CHÍNH =====
+def handle_query(question):
+    try:
+        raw_sql = text_to_sql(question)
+        sql = clean_sql(raw_sql)
+
+        cols, rows = run_sql(sql)
+        answer = explain_result(question, cols, rows)
+
+        return answer, sql
+
+    except Exception as e:
+        return f"❌ Lỗi: {e}", ""
+
+
+
+# ===== GRADIO UI =====
 demo = gr.Interface(
     fn=handle_query,
-    inputs=gr.Textbox(lines=3, label="Câu hỏi (bằng tiếng Việt hoặc tiếng Anh)"),
+    inputs=gr.Textbox(lines=3, label="💬 Nhập câu hỏi"),
     outputs=[
-        gr.Textbox(label="✅ Kết quả trả về từ database"),
-        gr.Textbox(label="📄 Truy vấn SQL được tạo")
+        gr.Textbox(label="✅ Câu trả lời"),
+        gr.Textbox(label="📄 SQL được sinh ra"),
     ],
-    title="💬 Trợ thủ phân tích dữ liệu với AI",
-    description="Nhập câu hỏi bằng ngôn ngữ tự nhiên, AI sẽ trả kết quả và câu SQL tương ứng."
+    title="🧠 AI Text-to-SQL Assistant",
+    description="Hỏi bằng tiếng Việt hoặc tiếng Anh. AI sẽ truy vấn DB và trả lời.",
 )
 
 if __name__ == "__main__":
